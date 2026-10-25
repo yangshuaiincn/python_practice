@@ -1,0 +1,13 @@
+[[services]]
+name = "nginx"
+check_command = "ls"
+restart_command = "ls"
+max_retries = 3
+check_interval = 10
+
+[[services]]
+name = "redis"
+check_command = "ls"
+restart_command = "dir"
+max_retries = 5
+check_interval = 10
