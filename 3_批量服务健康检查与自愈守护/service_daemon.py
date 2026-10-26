@@ -35,6 +35,11 @@ log_name = "service_daemon.log"
 
 # 默认执行命令超时时间
 exec_exceed_time = 5
+
+# 自定义告警，目前选择使用ssh远程登录到用户终端，弹窗提示信息，使用notify-send
+remote_ip = '192.168.231.3'
+remote_username = 'ys'
+
 # 设置终止事件
 stop_event = threading.Event()
 
@@ -158,8 +163,23 @@ def load_json(file_name: str) -> dict:
     return {}
 
 
-def send_warning(send_str: str):
-    print(send_str)
+def send_warning(ip_addr: str, username: str, title: str, send_str: str) -> bool:
+    remote_command = f'DISPLAY=:0 notify-send "{title}" "{send_str}"'
+    try:
+        result = subprocess.run(['ssh', f'{username}@{ip_addr}', remote_command], capture_output=True, timeout=10)
+        if result.returncode == 0:
+            logger.info(f'to {ip_addr} warning message send success')
+            return True
+        else:
+            try:
+                output = result.stderr.decode('gbk')
+            except UnicodeDecodeError:
+                output = result.stderr.decode('utf-8', errors="replace")
+            logger.error("command:%s run error %s" % (remote_command, output))
+            return False
+    except Exception as e:
+        logger.error(f"{type(e).__name__}: {e}")
+        return False
 
 
 def service_process(myservice: dict, state_dict: dict, exceed_time: int, dry_run: bool) -> dict:
@@ -212,18 +232,19 @@ def service_process(myservice: dict, state_dict: dict, exceed_time: int, dry_run
         # 判断重启失败次数是否到临界值，超过则不进行重启
         if state_dict['retry_count'] > myservice['max_retries']:
             logger.info('service:%s restart times exceed,default:%d,now:%d' %
-                        (myservice['name'], state_dict['retry_count'], myservice['max_retries']))
-
+                        (myservice['name'], myservice['max_retries'], state_dict['retry_count']))
             # 判断是否发送过告警，发送过就不再发
-            if not state_dict['is_warned']:
+            if state_dict['is_warned']:
                 logger.warning("service:%s restart times exceed,already send warning,this time don't send " %
                                (myservice['name'],))
-                send_warning('service:%s restart times exceed,default:%d,now:%d' %
-                             (myservice['name'], state_dict['retry_count'], myservice['max_retries']))
-                # logger.warning("需要自定义告警，暂时不写")
+                return state_dict
+            else:
+                warning_title = '%s run error' % myservice['name']
+                warning_message = 'service:%s restart times exceed,default:%d,now:%d' % \
+                                  (myservice['name'], state_dict['retry_count'], myservice['max_retries'])
+                send_warning(remote_ip, remote_username, warning_title, warning_message)
                 state_dict['is_warned'] = True
-
-            return state_dict
+                return state_dict
 
         # 开始执行重启命令
         logger.info('service:%s is not running,begin restart，command:%s' % (myservice['name'],
@@ -249,7 +270,7 @@ def service_process(myservice: dict, state_dict: dict, exceed_time: int, dry_run
 
             # 退避策略，每次重启失败后重启间隔+10秒，减少对故障服务的冲击
 
-            state_dict['check_interval'] += 10
+            # state_dict['check_interval'] += 10
 
             return state_dict
 
